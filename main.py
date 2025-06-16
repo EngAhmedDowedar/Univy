@@ -235,6 +235,7 @@ Eng. Ahmed Dowedar
     markup.add(telebot.types.InlineKeyboardButton("⬅️ العودة إلى القائمة الرئيسية", callback_data="main_menu"))
     bot.send_message(chat_id, help_text, parse_mode="Markdown", reply_markup=markup)
 
+# --- تم تعديل هذه الدالة ---
 def show_main_menu(chat_id, message_id=None):
     markup = telebot.types.InlineKeyboardMarkup(row_width=2)
     btn_general = telebot.types.InlineKeyboardButton("🤖 بحث عام (AI)", callback_data="search_general")
@@ -245,25 +246,30 @@ def show_main_menu(chat_id, message_id=None):
     
     text = "✅ أهلاً بك من جديد!\n\nاختر من فضلك ما تريد فعله:"
     
-    # --- تعديل: إزالة لوحة المفاتيح السفلية عند العودة للرئيسية ---
-    remove_reply_keyboard = telebot.types.ReplyKeyboardRemove()
-    
     if message_id:
         try:
             bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
-        except:
+        except Exception as e:
+            print(f"Failed to edit message: {e}")
             bot.send_message(chat_id, text, reply_markup=markup)
     else:
-        bot.send_message(chat_id, text, reply_markup=markup, reply_markup_message=remove_reply_keyboard)
+        bot.send_message(chat_id, text, reply_markup=markup)
 
-# --- جديد: دالة لعرض قائمة الكتب ---
 def show_book_list(chat_id, message_id=None):
     text = "⏳ جارٍ جلب قائمة الكتب..."
-    if message_id:
-        bot.edit_message_text(text, chat_id, message_id)
-    else:
-        bot.send_message(chat_id, text)
-    
+    # تعديل: نستخدم try/except عند تعديل الرسالة
+    try:
+        if message_id:
+            bot.edit_message_text(text, chat_id, message_id)
+        else:
+            # نرسل رسالة جديدة ونحفظ الـ ID الخاص بها للتعديل لاحقًا
+            msg = bot.send_message(chat_id, text)
+            message_id = msg.message_id
+    except Exception as e:
+        print(f"Error showing book list (initial): {e}")
+        msg = bot.send_message(chat_id, text)
+        message_id = msg.message_id
+
     books = list_books()
     if not books:
         bot.edit_message_text("عذرًا، لم أجد كتبًا في المجلد المخصص.", chat_id, message_id)
@@ -278,21 +284,32 @@ def show_book_list(chat_id, message_id=None):
     for book in books:
         markup.add(telebot.types.InlineKeyboardButton(book['name'], callback_data=f"book:{book['id']}"))
     
-    # --- جديد: إضافة زر العودة للقائمة الرئيسية ---
     markup.add(telebot.types.InlineKeyboardButton("⬅️ العودة إلى القائمة الرئيسية", callback_data="main_menu"))
     
     bot.edit_message_text("اختر الكتاب الذي تريد البحث فيه:", chat_id, message_id, reply_markup=markup)
 
+# --- تم تعديل هذه الدالة ---
 @bot.message_handler(commands=['start'])
 def handle_start(message):
     chat_id = str(message.chat.id)
     log_interaction(message.from_user, "بدء استخدام البوت", f"المستخدم ضغط /start")
+
+    # إزالة لوحة المفاتيح السفلية عند الضغط على /start
+    remove_markup = telebot.types.ReplyKeyboardRemove()
+    # نرسل رسالة مؤقتة لإزالة الكيبورد ثم نحذفها
+    try:
+        temp_msg = bot.send_message(chat_id, "...", reply_markup=remove_markup, disable_notification=True)
+        bot.delete_message(chat_id, temp_msg.message_id)
+    except Exception as e:
+        print(f"Could not remove reply keyboard: {e}")
+
     if check_membership(message.from_user.id):
         users = load_users()
         if chat_id not in users:
             users[chat_id] = {"state": "main_menu", "chat_history": []}
             print(f"مستخدم جديد تم تسجيله: {chat_id}")
             log_interaction(message.from_user, "تسجيل مستخدم جديد")
+        
         users[chat_id]['state'] = 'main_menu'
         save_users(users)
         show_main_menu(chat_id)
@@ -325,28 +342,22 @@ def handle_callback_query(call):
     if action == 'main_menu':
         show_main_menu(chat_id, call.message.message_id)
         return
-        
     if action == 'show_help':
         bot.delete_message(chat_id, call.message.message_id)
         send_help_message(chat_id)
         return
-        
     if action == 'send_feedback':
         user_data['state'] = 'awaiting_feedback'
         save_users(users)
         bot.edit_message_text("من فضلك، اكتب الآن اقتراحك أو وصف المشكلة التي تواجهك وسأقوم بإرسالها للمطور.", chat_id, call.message.message_id)
         return
-
     if action == "search_general":
         user_data['state'] = 'general_chat'
         user_data['chat_history'] = []
         save_users(users)
         bot.edit_message_text("تم تفعيل وضع البحث العام. تفضل بسؤالك.", chat_id, call.message.message_id, reply_markup=telebot.types.ReplyKeyboardRemove())
-    
-    # --- تم التعديل لاستخدام الدالة الجديدة ---
     elif action == "search_books":
         show_book_list(chat_id, call.message.message_id)
-        
     elif action.startswith("book:"):
         try:
             _, book_id = action.split(':', 1)
@@ -361,18 +372,12 @@ def handle_callback_query(call):
             user_data['selected_book_name'] = book_name
             user_data.pop('available_books', None)
             save_users(users)
-            
             bot.delete_message(chat_id, call.message.message_id)
             loading_msg = bot.send_message(chat_id, f"⏳ يتم الآن تحميل ومعالجة كتاب '{book_name}'...")
-            
             content = get_book_content(book_id, book_name)
-            
             bot.delete_message(chat_id, loading_msg.message_id)
-            
-            # --- جديد: إظهار لوحة المفاتيح السفلية ---
             reply_markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
             reply_markup.add(telebot.types.KeyboardButton("⬅️ العودة إلى قائمة الكتب"))
-            
             if "خطأ:" in content:
                 bot.send_message(chat_id, content)
             else:
@@ -386,25 +391,18 @@ def handle_user_message(message):
     if not check_membership(message.from_user.id):
         send_subscription_message(chat_id)
         return
-
     users = load_users()
     if chat_id not in users:
         handle_start(message)
         return
-        
-    # --- جديد: التعامل مع زر الرجوع لقائمة الكتب ---
     if message.text == "⬅️ العودة إلى قائمة الكتب":
         log_interaction(message.from_user, "العودة لقائمة الكتب")
-        # إزالة لوحة المفاتيح السفلية
         remove_markup = telebot.types.ReplyKeyboardRemove()
         bot.send_message(chat_id, "جاري العودة لقائمة الكتب...", reply_markup=remove_markup)
-        # استدعاء الدالة الجديدة لعرض قائمة الكتب
         show_book_list(chat_id)
         return
-
     user_data = users[chat_id]
     user_state = user_data.get('state')
-    
     if user_state == 'awaiting_feedback':
         feedback_text = message.text
         log_interaction(message.from_user, "📝 اقتراح/مشكلة جديدة", f"الرسالة: {feedback_text}")
@@ -413,7 +411,6 @@ def handle_user_message(message):
         save_users(users)
         show_main_menu(chat_id)
         return
-    
     if user_state in ['general_chat', 'book_chat']:
         processing_msg = bot.send_message(chat_id, "⏳ جارِ معالجة طلبك...")
         context = ""
@@ -442,5 +439,5 @@ def handle_user_message(message):
         show_main_menu(chat_id)
 
 if __name__ == "__main__":
-    print(f"Starting Gemini Bot (v1.1 - Navigation Update)... [ Shirbin - {time.strftime('%Y-%m-%d %H:%M:%S')} ]")
+    print(f"Starting Gemini Bot (v1.2 - Final)... [ Shirbin - {time.strftime('%Y-%m-%d %H:%M:%S')} ]")
     bot.infinity_polling()
