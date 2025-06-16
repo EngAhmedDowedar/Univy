@@ -6,6 +6,10 @@ import requests
 import time
 from threading import Lock
 from itertools import cycle
+from dotenv import load_dotenv
+
+# تحميل المتغيرات من ملف .env
+load_dotenv()
 
 # إضافة مكتبات Google Drive و PDF
 from google.oauth2 import service_account
@@ -21,7 +25,7 @@ BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 API_KEYS_STRING = os.getenv('API_KEYS')
 
 if not all([BOT_TOKEN, LOG_BOT_TOKEN, LOG_CHAT_ID, API_KEYS_STRING]):
-    raise ValueError("أحد متغيرات البيئة المطلوبة غير موجود! تأكد من تعريفها في Railway.")
+    raise ValueError("أحد متغيرات البيئة المطلوبة غير موجود! تأكد من وجود ملف .env صحيح.")
 
 API_KEYS = [key.strip() for key in API_KEYS_STRING.split(',')]
 api_key_cycler = cycle(API_KEYS)
@@ -34,14 +38,14 @@ MODEL = 'gemini-1.5-flash'
 # إعدادات Google Drive API
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 SERVICE_ACCOUNT_FILE = 'credentials.json'
-DRIVE_FOLDER_ID = os.getenv('DRIVE_FOLDER_ID', '1767thuB9M0Zj9t1n1-lTsoFAhV68XF9r')
+DRIVE_FOLDER_ID = os.getenv('DRIVE_FOLDER_ID')
 
 # إعدادات الاشتراك الإجباري
-YOUTUBE_CHANNEL_URL = os.getenv('YOUTUBE_CHANNEL_URL', 'https://www.youtube.com/@DowedarTech')
-TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID', '@dowedar_tech')
+YOUTUBE_CHANNEL_URL = os.getenv('YOUTUBE_CHANNEL_URL')
+TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
 
 # إعدادات تحديد المعدل
-COOLDOWN_SECONDS = int(os.getenv('COOLDOWN_SECONDS', '15'))
+COOLDOWN_SECONDS = int(os.getenv('COOLDOWN_SECONDS', 15))
 
 # متغيرات عامة
 file_lock = Lock()
@@ -147,25 +151,32 @@ def send_to_gemini(from_user, prompt, chat_history=None, context=""):
     contents = chat_history or []
     contents.append({"role": "user", "parts": [{"text": final_prompt}]})
     data = {"contents": contents, "generationConfig": {"temperature": 0.7, "maxOutputTokens": 8192}}
+    
     max_retries = 3
     for attempt in range(max_retries):
         try:
             current_api_key = next(api_key_cycler)
             url = f'https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent?key={current_api_key}'
+            
             response = requests.post(url, headers=headers, json=data, timeout=120)
+            
             if response.status_code == 429:
                 wait_time = (2 ** attempt) + 1 
                 print(f"واجهنا خطأ 429 (Too Many Requests). سننتظر {wait_time} ثانية ونحاول مجدداً...")
                 log_interaction(from_user, "⚠️ تحذير: ضغط على API", f"محاولة {attempt + 1} فشلت. سيتم الانتظار {wait_time} ثانية.")
                 time.sleep(wait_time)
                 continue
+
             response.raise_for_status()
+            
             result = response.json()
             if 'candidates' in result and result['candidates']:
                 if 'content' in result['candidates'][0] and 'parts' in result['candidates'][0]['content']:
                     return result['candidates'][0]['content']['parts'][0]['text']
+
             log_interaction(from_user, "⚠️ تحذير من Gemini", f"الرد من API لم يكن بالتنسيق المتوقع.\n`{result}`")
             return "لم أتمكن من توليد رد. يرجى المحاولة مرة أخرى."
+            
         except requests.exceptions.RequestException as e:
             print(f"خطأ في اتصال Gemini API: {e}")
             log_interaction(from_user, "❌ خطأ في اتصال Gemini", f"تفاصيل الخطأ:\n`{e}`")
@@ -178,8 +189,9 @@ def send_to_gemini(from_user, prompt, chat_history=None, context=""):
             print(f"خطأ غير متوقع في Gemini: {e}")
             log_interaction(from_user, "❌ خطأ غير متوقع في Gemini", f"تفاصيل الخطأ:\n`{e}`")
             return "حدث خطأ غير متوقع. يرجى المحاولة مرة أخرى."
+            
     return "لقد واجه الخادم ضغطاً عالياً. يرجى المحاولة مرة أخرى بعد دقيقة."
-
+        
 def send_long_message(chat_id, text, **kwargs):
     MAX_LENGTH = 4096
     if len(text) <= MAX_LENGTH:
@@ -224,7 +236,39 @@ def send_subscription_message(chat_id):
 def send_help_message(chat_id):
     help_text = """
 🎯 *معلومات البوت والإرشادات*
-... (محتوى رسالة المساعدة كما هو) ...
+
+🛠 *تم التطوير بواسطة:*
+Eng. Ahmed Dowedar
+📧 للتواصل: @engahmeddowedar
+
+🤖 *ما هو هذا البوت؟*
+- بوت ذكاء اصطناعي متقدم يعمل بنظام Gemini من Google
+- صمم خصيصاً لخدمة البحث العلمي والمعرفي
+- يدعم البحث العام والبحث في الكتب والمصادر
+- يدعم ملفات PDF وTXT بكفاءة عالية
+
+📌 *سياسة الاستخدام:*
+1. ممنوع استخدام البوت للأسئلة الشخصية عن المطور
+2. يخصص البوت للأسئلة العلمية والعملية فقط
+3. الأسئلة غير المفيدة سيتم تجاهلها
+4. التواصل الرسمي فقط عبر المعرف @engahmeddowedar
+
+📚 *كيفية الاستخدام الأمثل:*
+1. اختر نوع البحث (عام أو في الكتب)
+2. اكتب سؤالك العلمي/المعرفي بشكل واضح
+3. استخدم موارد البوت بتركيز على المواضيع المفيدة
+
+⚙️ *ميزات البوت:*
+- تقنيات متقدمة في البحث العلمي
+- فهم عميق للأسئلة الأكاديمية
+- دعم المحادثات المتعلقة بالبحث فقط
+- واجهة مخصصة للاستخدام الجاد
+
+🛠 *للاستفادة القصوى:*
+- ركز أسئلتك على المواضيع العلمية والعملية
+- تجنب الأسئلة الشخصية أو غير الهادفة
+- للتواصل المهني فقط عبر المعرف أعلاه
+- استخدم ميزة البحث في الكتب للاستفادة القصوى
 """
     markup = telebot.types.InlineKeyboardMarkup()
     markup.add(telebot.types.InlineKeyboardButton("⬅️ العودة إلى القائمة الرئيسية", callback_data="main_menu"))
@@ -426,5 +470,5 @@ def handle_user_message(message):
         show_main_menu(chat_id)
 
 if __name__ == "__main__":
-    print(f"Starting Gemini Bot (v2.0 - Key Pooling)... [ Shirbin - {time.strftime('%Y-%m-%d %H:%M:%S')} ]")
+    print(f"Starting Gemini Bot (v2.1 - Production Ready)... [ Shirbin - {time.strftime('%Y-%m-%d %H:%M:%S')} ]")
     bot.infinity_polling()
