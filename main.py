@@ -154,14 +154,10 @@ def send_to_gemini(prompt, chat_history=None, context=""):
         return "حدثت مشكلة في الاتصال بالخادم. يرجى المحاولة لاحقًا."
         
 def send_long_message(chat_id, text, **kwargs):
-    """
-    تقوم بتقسيم الرسائل الطويلة إلى عدة رسائل وإرسالها.
-    """
     MAX_LENGTH = 4096
     if len(text) <= MAX_LENGTH:
         bot.send_message(chat_id, text, **kwargs)
         return
-
     parts = []
     current_part = ""
     paragraphs = text.split('\n\n')
@@ -171,10 +167,8 @@ def send_long_message(chat_id, text, **kwargs):
             current_part = para + "\n\n"
         else:
             current_part += para + "\n\n"
-    
     if current_part:
         parts.append(current_part)
-
     for part in parts:
         if part.strip():
             bot.send_message(chat_id, part, **kwargs)
@@ -248,14 +242,46 @@ def show_main_menu(chat_id, message_id=None):
     btn_help = telebot.types.InlineKeyboardButton("📜 مساعدة وإرشادات", callback_data="show_help")
     btn_feedback = telebot.types.InlineKeyboardButton("📝 اقتراح أو مشكلة", callback_data="send_feedback")
     markup.add(btn_general, btn_books, btn_help, btn_feedback)
+    
     text = "✅ أهلاً بك من جديد!\n\nاختر من فضلك ما تريد فعله:"
+    
+    # --- تعديل: إزالة لوحة المفاتيح السفلية عند العودة للرئيسية ---
+    remove_reply_keyboard = telebot.types.ReplyKeyboardRemove()
+    
     if message_id:
         try:
             bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
         except:
             bot.send_message(chat_id, text, reply_markup=markup)
     else:
-        bot.send_message(chat_id, text, reply_markup=markup)
+        bot.send_message(chat_id, text, reply_markup=markup, reply_markup_message=remove_reply_keyboard)
+
+# --- جديد: دالة لعرض قائمة الكتب ---
+def show_book_list(chat_id, message_id=None):
+    text = "⏳ جارٍ جلب قائمة الكتب..."
+    if message_id:
+        bot.edit_message_text(text, chat_id, message_id)
+    else:
+        bot.send_message(chat_id, text)
+    
+    books = list_books()
+    if not books:
+        bot.edit_message_text("عذرًا، لم أجد كتبًا في المجلد المخصص.", chat_id, message_id)
+        return
+        
+    users = load_users()
+    user_data = users.get(str(chat_id), {})
+    user_data['available_books'] = books
+    save_users(users)
+    
+    markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+    for book in books:
+        markup.add(telebot.types.InlineKeyboardButton(book['name'], callback_data=f"book:{book['id']}"))
+    
+    # --- جديد: إضافة زر العودة للقائمة الرئيسية ---
+    markup.add(telebot.types.InlineKeyboardButton("⬅️ العودة إلى القائمة الرئيسية", callback_data="main_menu"))
+    
+    bot.edit_message_text("اختر الكتاب الذي تريد البحث فيه:", chat_id, message_id, reply_markup=markup)
 
 @bot.message_handler(commands=['start'])
 def handle_start(message):
@@ -295,35 +321,32 @@ def handle_callback_query(call):
         handle_start(call.message)
         return
     user_data = users[chat_id]
+
     if action == 'main_menu':
         show_main_menu(chat_id, call.message.message_id)
         return
+        
     if action == 'show_help':
         bot.delete_message(chat_id, call.message.message_id)
         send_help_message(chat_id)
         return
+        
     if action == 'send_feedback':
         user_data['state'] = 'awaiting_feedback'
         save_users(users)
         bot.edit_message_text("من فضلك، اكتب الآن اقتراحك أو وصف المشكلة التي تواجهك وسأقوم بإرسالها للمطور.", chat_id, call.message.message_id)
         return
+
     if action == "search_general":
         user_data['state'] = 'general_chat'
         user_data['chat_history'] = []
         save_users(users)
-        bot.edit_message_text("تم تفعيل وضع البحث العام. تفضل بسؤالك.", chat_id, call.message.message_id)
+        bot.edit_message_text("تم تفعيل وضع البحث العام. تفضل بسؤالك.", chat_id, call.message.message_id, reply_markup=telebot.types.ReplyKeyboardRemove())
+    
+    # --- تم التعديل لاستخدام الدالة الجديدة ---
     elif action == "search_books":
-        bot.edit_message_text("⏳ جارٍ جلب قائمة الكتب...", chat_id, call.message.message_id)
-        books = list_books()
-        if not books:
-            bot.edit_message_text("عذرًا، لم أجد كتبًا في المجلد المخصص.", chat_id, call.message.message_id)
-            return
-        user_data['available_books'] = books
-        save_users(users)
-        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
-        for book in books:
-            markup.add(telebot.types.InlineKeyboardButton(book['name'], callback_data=f"book:{book['id']}"))
-        bot.edit_message_text("اختر الكتاب الذي تريد البحث فيه:", chat_id, call.message.message_id, reply_markup=markup)
+        show_book_list(chat_id, call.message.message_id)
+        
     elif action.startswith("book:"):
         try:
             _, book_id = action.split(':', 1)
@@ -338,14 +361,24 @@ def handle_callback_query(call):
             user_data['selected_book_name'] = book_name
             user_data.pop('available_books', None)
             save_users(users)
-            loading_msg = bot.edit_message_text(f"⏳ يتم الآن تحميل ومعالجة كتاب '{book_name}'...", chat_id, call.message.message_id)
+            
+            bot.delete_message(chat_id, call.message.message_id)
+            loading_msg = bot.send_message(chat_id, f"⏳ يتم الآن تحميل ومعالجة كتاب '{book_name}'...")
+            
             content = get_book_content(book_id, book_name)
+            
+            bot.delete_message(chat_id, loading_msg.message_id)
+            
+            # --- جديد: إظهار لوحة المفاتيح السفلية ---
+            reply_markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+            reply_markup.add(telebot.types.KeyboardButton("⬅️ العودة إلى قائمة الكتب"))
+            
             if "خطأ:" in content:
-                bot.edit_message_text(content, chat_id, loading_msg.message_id)
+                bot.send_message(chat_id, content)
             else:
-                bot.edit_message_text(f"✅ تم تحميل كتاب '{book_name}'. يمكنك الآن طرح أسئلتك حول محتواه.", chat_id, loading_msg.message_id)
+                bot.send_message(chat_id, f"✅ تم تحميل كتاب '{book_name}'.\nيمكنك الآن طرح أسئلتك حول محتواه.", reply_markup=reply_markup)
         except Exception as e:
-            bot.edit_message_text(f"حدث خطأ في معالجة اختيارك: {e}", chat_id, call.message.message_id)
+            bot.send_message(chat_id, f"حدث خطأ في معالجة اختيارك: {e}")
 
 @bot.message_handler(func=lambda m: True)
 def handle_user_message(message):
@@ -353,12 +386,25 @@ def handle_user_message(message):
     if not check_membership(message.from_user.id):
         send_subscription_message(chat_id)
         return
+
     users = load_users()
     if chat_id not in users:
         handle_start(message)
         return
+        
+    # --- جديد: التعامل مع زر الرجوع لقائمة الكتب ---
+    if message.text == "⬅️ العودة إلى قائمة الكتب":
+        log_interaction(message.from_user, "العودة لقائمة الكتب")
+        # إزالة لوحة المفاتيح السفلية
+        remove_markup = telebot.types.ReplyKeyboardRemove()
+        bot.send_message(chat_id, "جاري العودة لقائمة الكتب...", reply_markup=remove_markup)
+        # استدعاء الدالة الجديدة لعرض قائمة الكتب
+        show_book_list(chat_id)
+        return
+
     user_data = users[chat_id]
     user_state = user_data.get('state')
+    
     if user_state == 'awaiting_feedback':
         feedback_text = message.text
         log_interaction(message.from_user, "📝 اقتراح/مشكلة جديدة", f"الرسالة: {feedback_text}")
@@ -367,6 +413,7 @@ def handle_user_message(message):
         save_users(users)
         show_main_menu(chat_id)
         return
+    
     if user_state in ['general_chat', 'book_chat']:
         processing_msg = bot.send_message(chat_id, "⏳ جارِ معالجة طلبك...")
         context = ""
@@ -395,5 +442,5 @@ def handle_user_message(message):
         show_main_menu(chat_id)
 
 if __name__ == "__main__":
-    print(f"Starting Gemini Bot (v1.0 - Full Features)... [ Shirbin - {time.strftime('%Y-%m-%d %H:%M:%S')} ]")
+    print(f"Starting Gemini Bot (v1.1 - Navigation Update)... [ Shirbin - {time.strftime('%Y-%m-%d %H:%M:%S')} ]")
     bot.infinity_polling()
