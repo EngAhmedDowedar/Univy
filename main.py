@@ -46,7 +46,6 @@ MODEL_GENERATION = 'gemini-1.5-flash'
 MODEL_EMBEDDING = 'models/text-embedding-004'
 
 # --- إعداد قاعدة البيانات المتجهة (Vector DB) ---
-# ملاحظة: ChromaDB سيقوم بإنشاء مجلد محلي لتخزين البيانات.
 chroma_client = chromadb.Client()
 vector_collection = chroma_client.get_or_create_collection(name="dowedar_rag_collection")
 
@@ -107,12 +106,13 @@ def chunk_text(text: str, chunk_size=750, chunk_overlap=100) -> list[str]:
         current_pos += chunk_size - chunk_overlap
     return [c for c in chunks if c.strip()]
 
-def index_book(book_id, book_name):
+def index_book(book_id, book_name, message):
     existing = vector_collection.get(where={"book_id": book_id}, limit=1)
     if existing['ids']:
         print(f"الكتاب '{book_name}' مفهرس بالفعل.")
         return "indexed"
-    print(f"فهرسة الكتاب '{book_name}' لأول مرة...")
+    
+    bot.edit_message_text(f"⏳ يتم الآن تجهيز وفهرسة كتاب '{book_name}'...\n(قد تستغرق هذه العملية عدة دقائق)", message.chat.id, message.message_id)
     service = get_drive_service()
     if not service: return "خطأ: لا يمكن الاتصال بخدمة Google Drive."
     try:
@@ -122,10 +122,12 @@ def index_book(book_id, book_name):
         done = False
         while not done:
             status, done = downloader.next_chunk()
-            print(f"Downloading {book_name}: {int(status.progress() * 100)}%.")
+            progress = int(status.progress() * 100)
+            bot.edit_message_text(f"⏳ يتم الآن تحميل '{book_name}': {progress}%", message.chat.id, message.message_id)
         
         file_io.seek(0)
         text = ""
+        bot.edit_message_text(f"⏳ جارٍ قراءة محتوى '{book_name}'...", message.chat.id, message.message_id)
         if book_name.lower().endswith('.pdf'):
             with fitz.open(stream=file_io, filetype="pdf") as doc: text = "".join(page.get_text() for page in doc)
         elif book_name.lower().endswith('.txt'):
@@ -136,10 +138,9 @@ def index_book(book_id, book_name):
 
     text_chunks = chunk_text(text)
     if not text_chunks: return "خطأ: لم يتم العثور على نص في الكتاب."
-    print(f"تم تقسيم الكتاب إلى {len(text_chunks)} فقرة.")
-
+    
+    bot.edit_message_text(f"⏳ تم تقسيم الكتاب إلى {len(text_chunks)} فقرة. جارٍ إنشاء الفهرس الذكي...", message.chat.id, message.message_id)
     try:
-        print("جاري توليد البصمات الرقمية (Embeddings)...")
         result = genai.embed_content(model=MODEL_EMBEDDING, content=text_chunks, task_type="RETRIEVAL_DOCUMENT")
         embeddings = result['embedding']
     except Exception as e:
@@ -162,7 +163,7 @@ def retrieve_relevant_context(question, book_id):
         print(f"خطأ أثناء البحث عن السياق: {e}")
         return f"خطأ في فهم سؤالك أو البحث عنه: {e}"
 
-# --- دوال البوت الأساسية ---
+# --- دوال البوت الأساسية ودوال المطور ---
 def log_interaction(from_user, event_type, details=""):
     try:
         user_info = (f"👤 *المستخدم:*\n- الاسم: {from_user.first_name} {from_user.last_name or ''}\n"
@@ -268,15 +269,15 @@ def send_subscription_message(chat_id):
     btn_check = telebot.types.InlineKeyboardButton("✅ تحققت من الاشتراك", callback_data="check_subscription")
     markup.add(btn_youtube, btn_telegram, btn_check)
     bot.send_message(chat_id, 
-                     "� *عذراً، يجب عليك الاشتراك في القنوات التالية أولاً لاستخدام البوت:*",
+                     "🚫 *عذراً، يجب عليك الاشتراك في القنوات التالية أولاً لاستخدام البوت:*",
                      reply_markup=markup, parse_mode="Markdown")
 
-# --- معالجات رسائل التليجرام (Handlers) ---
-def send_help_message(chat_id):
+# --- دوال عرض القوائم والواجهات ---
+def send_help_message(chat_id, message_id):
     help_text = """
         🎓 *Univy - مساعدك الجامعي الذكي*
 
-        مرحبًا بك في *Univy*، البوت الذكي المصمم لمساعدتك في دراستك الجامعية باستخدام الذكاء الاصطناعي �📚
+        مرحبًا بك في *Univy*، البوت الذكي المصمم لمساعدتك في دراستك الجامعية باستخدام الذكاء الاصطناعي 🤖📚
         ---
         📌 *تعليمات الاستخدام:*
         ✅ يمكنك استخدام Univy في:
@@ -300,9 +301,18 @@ def send_help_message(chat_id):
         """
     markup = telebot.types.InlineKeyboardMarkup()
     markup.add(telebot.types.InlineKeyboardButton("⬅️ العودة إلى القائمة الرئيسية", callback_data="main_menu"))
-    bot.send_message(chat_id, help_text, parse_mode="Markdown", reply_markup=markup)
+    try:
+        bot.edit_message_text(help_text, chat_id, message_id, parse_mode="Markdown", reply_markup=markup)
+    except Exception as e:
+        print(f"Error editing help message: {e}")
 
-def show_main_menu(chat_id, message_id=None):
+# --- [تعديل مقترح] إصلاح دالة القائمة الرئيسية بشكل أفضل ---
+def show_main_menu(chat_id, message_id):
+    """
+    يعرض القائمة الرئيسية. يحاول تعديل رسالة موجودة، 
+    وإذا فشل (لأن الرسالة قديمة جداً أو بسبب خطأ من تيليجرام)، 
+    فإنه يرسل رسالة جديدة ويحاول حذف القديمة لتنظيف المحادثة.
+    """
     markup = telebot.types.InlineKeyboardMarkup(row_width=2)
     btn_general = telebot.types.InlineKeyboardButton("🤖 بحث عام (AI)", callback_data="search_general")
     btn_books = telebot.types.InlineKeyboardButton("📚 بحث في المصادر", callback_data="search_books")
@@ -316,28 +326,41 @@ def show_main_menu(chat_id, message_id=None):
     markup.add(btn_help, btn_customize)
     
     text = "✅ أهلاً بك من جديد!\n\nاختر من فضلك ما تريد فعله:"
+    
     try:
-        if message_id: 
-            bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
-        else: 
-            bot.send_message(chat_id, text, reply_markup=markup)
+        # المحاولة الأولى: تعديل الرسالة الحالية، وهو الأسلوب الأفضل والأسرع
+        bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
     except Exception as e:
-        print(f"Error showing main menu: {e}")
+        # إذا فشل التعديل، يتم طباعة الخطأ للمتابعة دون إيقاف البوت
+        print(f"Error editing message {message_id}, falling back to sending a new one. Error: {e}")
+        
+        # الخطة البديلة: إرسال رسالة جديدة بالقائمة
         bot.send_message(chat_id, text, reply_markup=markup)
+        
+        try:
+            # ومحاولة حذف الرسالة القديمة التي سببت المشكلة لتنظيف الشات
+            bot.delete_message(chat_id, message_id)
+        except Exception as e_del:
+            # في حال فشل الحذف أيضاً (قد يحدث إذا لم يكن للبوت صلاحية الحذف أو الرسالة قديمة جداً)
+            print(f"Also failed to delete the problematic message {message_id}. Error: {e_del}")
 
-def show_book_list(chat_id, message_id=None):
+
+def show_book_list(chat_id, message_id):
     text = "⏳ جارٍ جلب قائمة الكتب..."
     try:
-        if message_id: msg = bot.edit_message_text(text, chat_id, message_id)
-        else: msg = bot.send_message(chat_id, text)
-        message_id = msg.message_id
+        bot.edit_message_text(text, chat_id, message_id)
     except Exception:
         msg = bot.send_message(chat_id, text)
         message_id = msg.message_id
+
     books = list_books()
     if not books:
-        bot.edit_message_text("عذرًا، لم أجد كتبًا في المجلد المخصص.", chat_id, message_id)
+        bot.edit_message_text("عذرًا، لم أجد كتبًا في المجلد المخصص حالياً.", chat_id, message_id)
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton("⬅️ العودة إلى القائمة الرئيسية", callback_data="main_menu"))
+        bot.edit_message_reply_markup(chat_id, message_id, reply_markup=markup)
         return
+
     users = load_users()
     user_data = users.get(str(chat_id), {})
     user_data['available_books'] = books
@@ -347,18 +370,22 @@ def show_book_list(chat_id, message_id=None):
     markup.add(telebot.types.InlineKeyboardButton("⬅️ العودة إلى القائمة الرئيسية", callback_data="main_menu"))
     bot.edit_message_text("اختر الكتاب الذي تريد البحث فيه:", chat_id, message_id, reply_markup=markup)
 
+# --- المعالجات الرئيسية (Handlers) ---
 @bot.message_handler(commands=['start'])
 def handle_start(message):
     chat_id = str(message.chat.id)
     log_interaction(message.from_user, "بدء استخدام البوت", "/start")
     if check_membership(message.from_user.id):
         users = load_users()
-        if chat_id not in users:
-            users[chat_id] = {"state": "main_menu", "chat_history": []}
+        user_data = users.get(chat_id, {})
+        user_data['state'] = 'main_menu'
+        if 'chat_history' not in user_data:
+            user_data['chat_history'] = []
             log_interaction(message.from_user, "تسجيل مستخدم جديد")
-        users[chat_id]['state'] = 'main_menu'
-        save_users(users)
-        show_main_menu(message.chat.id)
+        save_users({**users, chat_id: user_data})
+        # استخدام نمط "إرسال ثم تعديل" لعرض القائمة الرئيسية بسلاسة
+        msg_for_menu = bot.send_message(chat_id, "أهلاً بك! جارٍ تحميل القائمة...", reply_markup=telebot.types.ReplyKeyboardRemove())
+        show_main_menu(chat_id, msg_for_menu.message_id)
     else:
         send_subscription_message(message.chat.id)
 
@@ -373,7 +400,6 @@ def handle_callback_query(call):
     if action == 'check_subscription':
         if check_membership(call.from_user.id):
             bot.delete_message(chat_id, call.message.message_id)
-            # Create a mock message object to pass to handle_start
             mock_message = telebot.types.Message(message_id=0, from_user=call.from_user, date=int(time.time()), chat=call.message.chat, content_type='text', options={}, json_string='')
             handle_start(mock_message)
         else:
@@ -385,47 +411,62 @@ def handle_callback_query(call):
         return
         
     users = load_users()
-    user_data = users.get(chat_id, {"state": "main_menu", "chat_history": []})
+    user_data = users.get(chat_id, {})
     
-    if action == 'main_menu': show_main_menu(chat_id, call.message.message_id)
-    elif action == 'show_help': send_help_message(chat_id)
-    elif action == 'send_feedback':
-        user_data['state'] = 'awaiting_feedback'
+    if action == 'main_menu': 
+        show_main_menu(chat_id, call.message.message_id)
+    elif action == 'show_help': 
+        send_help_message(chat_id, call.message.message_id)
+    elif action == 'customize_bot':
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton("⬅️ العودة إلى القائمة الرئيسية", callback_data="main_menu"))
+        text = "⚙️ هذه الميزة قيد التطوير وستتوفر قريباً..."
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+    else:
+        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+        reply_markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        
+        if action == 'send_feedback':
+            user_data['state'] = 'awaiting_feedback'
+            reply_markup.add(telebot.types.KeyboardButton("❌ إلغاء"))
+            bot.send_message(chat_id, "اكتب الآن اقتراحك أو وصف المشكلة:", reply_markup=reply_markup)
+        elif action == 'add_book':
+            user_data['state'] = 'awaiting_book_file'
+            reply_markup.add(telebot.types.KeyboardButton("❌ إلغاء"))
+            bot.send_message(chat_id, "يرجى إرسال الكتاب الآن بصيغة PDF أو TXT.", reply_markup=reply_markup)
+        elif action == "search_general":
+            user_data['state'] = 'general_chat'
+            user_data['chat_history'] = []
+            reply_markup.add(telebot.types.KeyboardButton("⬅️ العودة إلى القائمة الرئيسية"))
+            bot.send_message(chat_id, "تم تفعيل وضع البحث العام. تفضل بسؤالك.", reply_markup=reply_markup)
+        elif action == "search_books":
+            user_data['state'] = 'Browse_books'
+            show_book_list(chat_id, call.message.message_id)
+        elif action.startswith("book:"):
+            try:
+                _, book_id = action.split(':', 1)
+                available_books = user_data.get('available_books', [])
+                book_name = next((b['name'] for b in available_books if b['id'] == book_id), "غير معروف")
+                
+                msg = bot.send_message(chat_id, "...", reply_markup=telebot.types.ReplyKeyboardRemove())
+                bot.delete_message(chat_id, msg.message_id)
+                
+                indexing_msg = bot.send_message(chat_id, f"⏳ جارٍ التحضير لفهرسة '{book_name}'...")
+                result = index_book(book_id, book_name, indexing_msg)
+                
+                if result == "indexed":
+                    user_data.update({'state': 'book_chat', 'selected_book_id': book_id, 'selected_book_name': book_name})
+                    user_data.pop('available_books', None)
+                    reply_markup.add(telebot.types.KeyboardButton("⬅️ العودة إلى قائمة الكتب"))
+                    bot.edit_message_text(f"✅ تم تجهيز كتاب '{book_name}' بنجاح.\nيمكنك الآن طرح أسئلتك حوله.", chat_id, indexing_msg.message_id)
+                    bot.send_message(chat_id, "استخدم الكيبورد في الأسفل للعودة للقائمة الرئيسية عند الانتهاء.", reply_markup=reply_markup)
+                else:
+                    bot.edit_message_text(f"حدث خطأ أثناء تجهيز الكتاب: {result}", chat_id, indexing_msg.message_id)
+                    show_main_menu(chat_id, indexing_msg.message_id)
+            except Exception as e:
+                bot.send_message(chat_id, f"حدث خطأ في معالجة اختيارك: {e}")
+                show_main_menu(chat_id, call.message.message_id)
         save_users({**users, chat_id: user_data})
-        bot.edit_message_text("اكتب الآن اقتراحك أو وصف المشكلة:", chat_id, call.message.message_id)
-    elif action == 'add_book':
-        user_data['state'] = 'awaiting_book_file'
-        save_users({**users, chat_id: user_data})
-        bot.edit_message_text("يرجى إرسال الكتاب الآن بصيغة PDF أو TXT.", chat_id, call.message.message_id)
-    elif action == "search_general":
-        user_data['state'] = 'general_chat'
-        user_data['chat_history'] = []
-        save_users({**users, chat_id: user_data})
-        bot.edit_message_text("تم تفعيل وضع البحث العام. تفضل بسؤالك.", chat_id, call.message.message_id)
-    elif action == "search_books":
-        user_data['state'] = 'browsing_books'
-        save_users({**users, chat_id: user_data})
-        show_book_list(chat_id, call.message.message_id)
-    elif action.startswith("book:"):
-        try:
-            _, book_id = action.split(':', 1)
-            available_books = user_data.get('available_books', [])
-            book_name = next((b['name'] for b in available_books if b['id'] == book_id), "غير معروف")
-            bot.edit_message_text(f"⏳ يتم الآن تجهيز وفهرسة كتاب '{book_name}'...", chat_id, call.message.message_id)
-            result = index_book(book_id, book_name)
-            if result == "indexed":
-                user_data.update({'state': 'book_chat', 'selected_book_id': book_id, 'selected_book_name': book_name})
-                user_data.pop('available_books', None)
-                save_users({**users, chat_id: user_data})
-                reply_markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-                reply_markup.add(telebot.types.KeyboardButton("⬅️ العودة إلى قائمة الكتب"))
-                bot.send_message(chat_id, f"✅ تم تجهيز كتاب '{book_name}' بنجاح.", reply_markup=reply_markup)
-            else:
-                bot.send_message(chat_id, f"حدث خطأ أثناء تجهيز الكتاب: {result}")
-                show_main_menu(chat_id)
-        except Exception as e:
-            bot.send_message(chat_id, f"حدث خطأ في معالجة اختيارك: {e}")
-            show_main_menu(chat_id)
 
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
@@ -444,7 +485,8 @@ def handle_document(message):
         user_data['state'] = 'main_menu'
         save_users(users)
         bot.send_message(chat_id, "شكرًا لمساهمتك! سيتم مراجعة الكتاب وإضافته في أقرب وقت. 🙏")
-        show_main_menu(chat_id)
+        msg_for_menu = bot.send_message(chat_id, "جاري العودة...", reply_markup=telebot.types.ReplyKeyboardRemove())
+        show_main_menu(chat_id, msg_for_menu.message_id)
 
 @bot.message_handler(func=lambda m: True)
 def handle_user_message(message):
@@ -459,11 +501,12 @@ def handle_user_message(message):
         handle_start(message)
         return
         
-    if message.text == "⬅️ العودة إلى قائمة الكتب":
-        log_interaction(message.from_user, "العودة لقائمة الكتب")
+    if message.text in ["⬅️ العودة إلى القائمة الرئيسية", "❌ إلغاء", "⬅️ العودة إلى قائمة الكتب"]:
+        log_interaction(message.from_user, "العودة للقائمة الرئيسية / إلغاء")
         user_data['state'] = 'main_menu'
         save_users(users)
-        show_book_list(chat_id)
+        msg_for_menu = bot.send_message(chat_id, "جاري العودة للقائمة الرئيسية...", reply_markup=telebot.types.ReplyKeyboardRemove())
+        show_main_menu(chat_id, msg_for_menu.message_id)
         return
 
     user_state = user_data.get('state')
@@ -473,7 +516,8 @@ def handle_user_message(message):
         bot.send_message(chat_id, "✅ شكرًا لك! تم استلام رسالتك بنجاح وجارِ مراجعتها.")
         user_data['state'] = 'main_menu'
         save_users(users)
-        show_main_menu(chat_id)
+        msg_for_menu = bot.send_message(chat_id, "جاري العودة...", reply_markup=telebot.types.ReplyKeyboardRemove())
+        show_main_menu(chat_id, msg_for_menu.message_id)
         return
 
     if user_state in ['general_chat', 'book_chat']:
@@ -484,7 +528,6 @@ def handle_user_message(message):
             bot.send_message(chat_id, f"⏳ الرجاء الانتظار {remaining_time} ثانية.")
             return
         user_data['last_query_time'] = current_time
-        save_users(users)
         
         processing_msg = bot.send_message(chat_id, "⏳ جارِ معالجة طلبك...")
         context = ""
@@ -508,14 +551,17 @@ def handle_user_message(message):
             chat_history.append({"role": "user", "parts": [{"text": message.text}]})
             chat_history.append({"role": "model", "parts": [{"text": response}]})
             user_data["chat_history"] = chat_history[-10:]
-            save_users(users)
+        save_users(users)
     else:
-        # If the user is in a state like 'awaiting_book_file' and sends text instead of a file
         if user_data.get('state') == 'awaiting_book_file':
-             bot.send_message(chat_id, "يرجى إرسال ملف الكتاب وليس رسالة نصية. أو يمكنك العودة للقائمة الرئيسية.")
-        else: # Default behavior
-            show_main_menu(chat_id)
+             bot.send_message(chat_id, "يرجى إرسال ملف الكتاب وليس رسالة نصية. أو اضغط على زر '❌ إلغاء' للعودة.")
+        else:
+            msg_for_menu = bot.send_message(chat_id, "...")
+            bot.delete_message(chat_id, msg_for_menu.message_id)
+            # Send a new message to show the menu on, preventing edit errors.
+            new_msg_for_menu = bot.send_message(chat_id, "يبدو أنك لست في وضع محادثة. سأعرض لك القائمة.")
+            show_main_menu(chat_id, new_msg_for_menu.message_id)
 
 if __name__ == "__main__":
-    print(f"Starting Univy Bot v1.0 - The Complete Version... [ Shirbin - {time.strftime('%Y-%m-%d %H:%M:%S')} ]")
+    print(f"Starting Univy Bot - Final Version... [ Shirbin - {time.strftime('%Y-%m-%d %H:%M:%S')} ]")
     bot.infinity_polling()
