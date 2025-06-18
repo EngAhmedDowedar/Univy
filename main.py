@@ -8,11 +8,9 @@ from itertools import cycle
 from dotenv import load_dotenv
 import io
 
-# --- المكتبات الجديدة لتطوير توفير التوكنز (RAG) ---
+# --- المكتبات المطلوبة ---
 import google.generativeai as genai
 import chromadb
-
-# إضافة مكتبات Google Drive و PDF
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -26,16 +24,19 @@ LOG_BOT_TOKEN = os.getenv('LOG_BOT_TOKEN')
 LOG_CHAT_ID = os.getenv('LOG_CHAT_ID')
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 API_KEYS_STRING = os.getenv('API_KEYS')
+FEEDBACK_BOT_TOKEN = os.getenv('FEEDBACK_BOT_TOKEN')
+DEVELOPER_CHAT_ID = os.getenv('DEVELOPER_CHAT_ID') 
 
-if not all([BOT_TOKEN, LOG_BOT_TOKEN, LOG_CHAT_ID, API_KEYS_STRING]):
-    raise ValueError("أحد متغيرات البيئة المطلوبة غير موجود! تأكد من وجود ملف .env صحيح وبه كل البيانات.")
+# --- التحقق من وجود كل المتغيرات المطلوبة ---
+if not all([BOT_TOKEN, LOG_BOT_TOKEN, LOG_CHAT_ID, API_KEYS_STRING, FEEDBACK_BOT_TOKEN, DEVELOPER_CHAT_ID]):
+    raise ValueError("أحد متغيرات البيئة المطلوبة غير موجود! تأكد من وجود كل التوكنات والـ IDs.")
 
 API_KEYS = [key.strip() for key in API_KEYS_STRING.split(',')]
 api_key_cycler = cycle(API_KEYS)
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- إعدادات Gemini و RAG الجديدة ---
+# --- إعدادات Gemini و RAG ---
 try:
     genai.configure(api_key=next(api_key_cycler))
 except Exception as e:
@@ -45,6 +46,7 @@ MODEL_GENERATION = 'gemini-1.5-flash'
 MODEL_EMBEDDING = 'models/text-embedding-004'
 
 # --- إعداد قاعدة البيانات المتجهة (Vector DB) ---
+# ملاحظة: ChromaDB سيقوم بإنشاء مجلد محلي لتخزين البيانات.
 chroma_client = chromadb.Client()
 vector_collection = chroma_client.get_or_create_collection(name="dowedar_rag_collection")
 
@@ -92,10 +94,8 @@ def list_books():
         print(f"خطأ في جلب قائمة الكتب: {e}")
         return []
 
-# --- دوال الـ RAG الجديدة (الجزء المطور) ---
-
+# --- دوال الـ RAG (البحث الذكي) ---
 def chunk_text(text: str, chunk_size=750, chunk_overlap=100) -> list[str]:
-    """دالة بسيطة لتقسيم النص إلى فقرات صغيرة ومتداخلة."""
     if not text: return []
     words = text.split()
     chunks = []
@@ -108,12 +108,10 @@ def chunk_text(text: str, chunk_size=750, chunk_overlap=100) -> list[str]:
     return [c for c in chunks if c.strip()]
 
 def index_book(book_id, book_name):
-    """الدالة الرئيسية لفهرسة الكتاب: تحميل، تقسيم، تحويل لبصمات، وتخزين."""
     existing = vector_collection.get(where={"book_id": book_id}, limit=1)
     if existing['ids']:
         print(f"الكتاب '{book_name}' مفهرس بالفعل.")
         return "indexed"
-
     print(f"فهرسة الكتاب '{book_name}' لأول مرة...")
     service = get_drive_service()
     if not service: return "خطأ: لا يمكن الاتصال بخدمة Google Drive."
@@ -155,15 +153,9 @@ def index_book(book_id, book_name):
     return "indexed"
 
 def retrieve_relevant_context(question, book_id):
-    """دالة البحث الذكي: تبحث عن الفقرات الأكثر صلة بسؤال المستخدم."""
-    print(f"البحث عن إجابة لـ '{question}' في الكتاب ID: {book_id}")
     try:
         question_embedding = genai.embed_content(model=MODEL_EMBEDDING, content=question, task_type="RETRIEVAL_QUERY")['embedding']
-        results = vector_collection.query(
-            query_embeddings=[question_embedding],
-            n_results=5,
-            where={"book_id": book_id}
-        )
+        results = vector_collection.query(query_embeddings=[question_embedding], n_results=5, where={"book_id": book_id})
         context = "\n---\n".join(results['documents'][0])
         return context
     except Exception as e:
@@ -182,6 +174,45 @@ def log_interaction(from_user, event_type, details=""):
     except Exception as e:
         print(f"❌ فشل إرسال اللوج: {e}")
 
+def send_feedback_to_dev(from_user, feedback_text):
+    try:
+        user_info = (f"👤 *مرسل الاقتراح:*\n"
+                     f"- الاسم: {from_user.first_name} {from_user.last_name or ''}\n"
+                     f"- اليوزر: @{from_user.username or 'N/A'}\n- الآي دي: `{from_user.id}`")
+        feedback_message = (f"📬 *اقتراح/مشكلة جديدة!*\n\n{user_info}\n\n"
+                            f"✉️ *نص الرسالة:*\n{feedback_text}")
+        url = f"https://api.telegram.org/bot{FEEDBACK_BOT_TOKEN}/sendMessage"
+        params = {'chat_id': DEVELOPER_CHAT_ID, 'text': feedback_message, 'parse_mode': 'Markdown'}
+        requests.post(url, json=params, timeout=10)
+    except Exception as e:
+        print(f"❌ فشل إرسال رسالة الاقتراح: {e}")
+
+def send_book_to_dev(from_user, document):
+    try:
+        file_info = bot.get_file(document.file_id)
+        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
+        file_content_response = requests.get(file_url, timeout=60)
+        file_content_response.raise_for_status()
+        file_content = file_content_response.content
+        
+        user_info = (f"👤 *مرسل الكتاب:*\n"
+                     f"- الاسم: {from_user.first_name} {from_user.last_name or ''}\n"
+                     f"- اليوزر: @{from_user.username or 'N/A'}\n- الآي دي: `{from_user.id}`")
+        caption = (f"📚 *كتاب جديد مقترح!*\n\n{user_info}\n\n"
+                   f"📄 *اسم الملف:* `{document.file_name}`\n"
+                   f"💾 *الحجم:* {round(document.file_size / 1024, 2)} KB")
+        
+        url = f"https://api.telegram.org/bot{FEEDBACK_BOT_TOKEN}/sendDocument"
+        files = {'document': (document.file_name, file_content)}
+        data = {'chat_id': DEVELOPER_CHAT_ID, 'caption': caption, 'parse_mode': 'Markdown'}
+        requests.post(url, data=data, files=files, timeout=60)
+    except Exception as e:
+        print(f"❌ فشل في إرسال الكتاب للمطور: {e}")
+        error_message = f"فشل استلام كتاب من المستخدم {from_user.id} (@{from_user.username}). الخطأ: {e}"
+        error_url = f"https://api.telegram.org/bot{FEEDBACK_BOT_TOKEN}/sendMessage"
+        params = {'chat_id': DEVELOPER_CHAT_ID, 'text': error_message}
+        requests.post(error_url, json=params)
+
 def send_to_gemini(from_user, prompt, chat_history=None, context=""):
     headers = {'Content-Type': 'application/json'}
     final_prompt = prompt
@@ -189,29 +220,21 @@ def send_to_gemini(from_user, prompt, chat_history=None, context=""):
         final_prompt = (f"أجب على السؤال التالي بناءً على النص المرفق فقط. إذا كانت الإجابة غير موجودة في النص، قل بوضوح 'الإجابة غير متوفرة في المصدر'.\n\n"
                         f"--- بداية النص المرجعي ---\n{context}\n--- نهاية النص المرجعي ---\n\n"
                         f"السؤال: {prompt}")
-    
-    contents = chat_history or []
-    contents.append({"role": "user", "parts": [{"text": final_prompt}]})
+    contents = (chat_history or []) + [{"role": "user", "parts": [{"text": final_prompt}]}]
     data = {"contents": contents, "generationConfig": {"temperature": 0.7, "maxOutputTokens": 8192}}
-    
     max_retries = 3
     for attempt in range(max_retries):
         try:
             current_api_key = next(api_key_cycler)
             url = f'https://generativelanguage.googleapis.com/v1beta/models/{MODEL_GENERATION}:generateContent?key={current_api_key}'
             response = requests.post(url, headers=headers, json=data, timeout=120)
-            
             if response.status_code == 429:
-                wait_time = (2 ** attempt) + 1
-                time.sleep(wait_time)
+                time.sleep((2 ** attempt) + 1)
                 continue
-            
             response.raise_for_status()
             result = response.json()
-            
-            if 'candidates' in result and result['candidates'] and 'content' in result['candidates'][0] and 'parts' in result['candidates'][0]['content']:
+            if 'candidates' in result and result['candidates'][0].get('content', {}).get('parts'):
                 return result['candidates'][0]['content']['parts'][0]['text']
-            
             return "لم أتمكن من توليد رد. يرجى المحاولة مرة أخرى."
         except requests.exceptions.RequestException as e:
             if attempt >= max_retries - 1: return "حدثت مشكلة في الاتصال بالخادم. يرجى المحاولة لاحقًا."
@@ -225,17 +248,7 @@ def send_long_message(chat_id, text, **kwargs):
     if len(text) <= MAX_LENGTH:
         bot.send_message(chat_id, text, **kwargs)
         return
-    parts = []
-    current_part = ""
-    paragraphs = text.split('\n\n')
-    for para in paragraphs:
-        if len(current_part) + len(para) + 2 > MAX_LENGTH:
-            parts.append(current_part)
-            current_part = para + "\n\n"
-        else:
-            current_part += para + "\n\n"
-    if current_part:
-        parts.append(current_part)
+    parts = [text[i:i+MAX_LENGTH] for i in range(0, len(text), MAX_LENGTH)]
     for part in parts:
         if part.strip():
             bot.send_message(chat_id, part, **kwargs)
@@ -263,44 +276,28 @@ def send_help_message(chat_id):
     help_text = """
         🎓 *Univy - مساعدك الجامعي الذكي*
 
-        مرحبًا بك في *Univy*، البوت الذكي المصمم لمساعدتك في دراستك الجامعية باستخدام الذكاء الاصطناعي 🤖📚
-
+        مرحبًا بك في *Univy*، البوت الذكي المصمم لمساعدتك في دراستك الجامعية باستخدام الذكاء الاصطناعي �📚
         ---
-
         📌 *تعليمات الاستخدام:*
-
         ✅ يمكنك استخدام Univy في:
         - البحث داخل كتب المنهج الخاصة بك
         - طرح أسئلة علمية أو دراسية مفيدة فقط
-
         🚫 ممنوع تمامًا:
         - إرسال أسئلة بلا هدف أو غير مفيدة
         - استخدام البوت في أسئلة تتعلق بالغش أو أي نشاط غير قانوني
         - محاولة إساءة استخدام البوت بأي شكل
-
         ⚠️ قد يتم حظر المستخدمين المخالفين تلقائيًا
-
         ---
-
         ⚙️ *مميزات Univy:*
         - البحث الذكي داخل كتب المنهج (PDF)
         - استخدام واجهة بسيطة وسريعة
-
-        📌 *نصائح:*
-        - كلما كان سؤالك دقيقًا، كانت الإجابة أفضل
-        - تأكد من أن كتبك بصيغة PDF وواضحة المحتوى
-
         ---
-
-        👨‍💻 *تم تطوير Univy بواسطة:*  
-        *Eng. Ahmed Dowedar*  
+        👨‍💻 *تم تطوير Univy بواسطة:*
+        *Eng. Ahmed Dowedar*
         📬 للتواصل أو الاستفسار: [@engahmeddowedar](https://t.me/engahmeddowedar)
-
         ---
-
         💡 شكرًا لاستخدامك Univy – نتمنى لك تجربة دراسية أسهل وأكثر ذكاءً!
         """
-
     markup = telebot.types.InlineKeyboardMarkup()
     markup.add(telebot.types.InlineKeyboardButton("⬅️ العودة إلى القائمة الرئيسية", callback_data="main_menu"))
     bot.send_message(chat_id, help_text, parse_mode="Markdown", reply_markup=markup)
@@ -311,14 +308,15 @@ def show_main_menu(chat_id, message_id=None):
     btn_books = telebot.types.InlineKeyboardButton("📚 بحث في المصادر", callback_data="search_books")
     btn_help = telebot.types.InlineKeyboardButton("📜 مساعدة وإرشادات", callback_data="show_help")
     btn_feedback = telebot.types.InlineKeyboardButton("📝 اقتراح أو مشكلة", callback_data="send_feedback")
+    btn_add_book = telebot.types.InlineKeyboardButton("➕ إضافة كتاب", callback_data="add_book")
     btn_customize = telebot.types.InlineKeyboardButton("✨ تخصيص البوت", callback_data="customize_bot")
     
-    markup.add(btn_general, btn_books, btn_help, btn_feedback)
-    markup.add(btn_customize)
+    markup.add(btn_general, btn_books)
+    markup.add(btn_feedback, btn_add_book)
+    markup.add(btn_help, btn_customize)
     
     text = "✅ أهلاً بك من جديد!\n\nاختر من فضلك ما تريد فعله:"
     try:
-        remove_markup = telebot.types.ReplyKeyboardRemove()
         if message_id: 
             bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
         else: 
@@ -330,28 +328,20 @@ def show_main_menu(chat_id, message_id=None):
 def show_book_list(chat_id, message_id=None):
     text = "⏳ جارٍ جلب قائمة الكتب..."
     try:
-        remove_markup = telebot.types.ReplyKeyboardRemove()
-        if message_id: 
-            msg = bot.edit_message_text(text, chat_id, message_id)
-        else: 
-            temp_msg = bot.send_message(chat_id, "...", reply_markup=remove_markup)
-            bot.delete_message(chat_id, temp_msg.message_id)
-            msg = bot.send_message(chat_id, text)
+        if message_id: msg = bot.edit_message_text(text, chat_id, message_id)
+        else: msg = bot.send_message(chat_id, text)
         message_id = msg.message_id
-    except Exception as e:
+    except Exception:
         msg = bot.send_message(chat_id, text)
         message_id = msg.message_id
-        
     books = list_books()
     if not books:
         bot.edit_message_text("عذرًا، لم أجد كتبًا في المجلد المخصص.", chat_id, message_id)
         return
-        
     users = load_users()
     user_data = users.get(str(chat_id), {})
     user_data['available_books'] = books
     save_users(users)
-    
     markup = telebot.types.InlineKeyboardMarkup(row_width=1)
     for book in books: markup.add(telebot.types.InlineKeyboardButton(book['name'], callback_data=f"book:{book['id']}"))
     markup.add(telebot.types.InlineKeyboardButton("⬅️ العودة إلى القائمة الرئيسية", callback_data="main_menu"))
@@ -368,9 +358,9 @@ def handle_start(message):
             log_interaction(message.from_user, "تسجيل مستخدم جديد")
         users[chat_id]['state'] = 'main_menu'
         save_users(users)
-        show_main_menu(chat_id)
+        show_main_menu(message.chat.id)
     else:
-        send_subscription_message(chat_id)
+        send_subscription_message(message.chat.id)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback_query(call):
@@ -378,17 +368,13 @@ def handle_callback_query(call):
     action = call.data
     log_interaction(call.from_user, "ضغط زر", f"`{action}`")
     
-    # يجب استدعاء answer_callback_query في البداية لكل الأزرار
     bot.answer_callback_query(call.id)
 
     if action == 'check_subscription':
         if check_membership(call.from_user.id):
             bot.delete_message(chat_id, call.message.message_id)
-            mock_message = telebot.types.Message(
-                message_id=call.message.message_id, from_user=call.from_user,
-                date=call.message.date, chat=call.message.chat,
-                content_type='text', options={}, json_string=''
-            )
+            # Create a mock message object to pass to handle_start
+            mock_message = telebot.types.Message(message_id=0, from_user=call.from_user, date=int(time.time()), chat=call.message.chat, content_type='text', options={}, json_string='')
             handle_start(mock_message)
         else:
             bot.answer_callback_query(call.id, "❌ لم تشترك بعد.", show_alert=True)
@@ -399,57 +385,66 @@ def handle_callback_query(call):
         return
         
     users = load_users()
-    user_data = users.get(chat_id, {})
+    user_data = users.get(chat_id, {"state": "main_menu", "chat_history": []})
     
     if action == 'main_menu': show_main_menu(chat_id, call.message.message_id)
     elif action == 'show_help': send_help_message(chat_id)
     elif action == 'send_feedback':
         user_data['state'] = 'awaiting_feedback'
-        save_users(users)
+        save_users({**users, chat_id: user_data})
         bot.edit_message_text("اكتب الآن اقتراحك أو وصف المشكلة:", chat_id, call.message.message_id)
+    elif action == 'add_book':
+        user_data['state'] = 'awaiting_book_file'
+        save_users({**users, chat_id: user_data})
+        bot.edit_message_text("يرجى إرسال الكتاب الآن بصيغة PDF أو TXT.", chat_id, call.message.message_id)
     elif action == "search_general":
         user_data['state'] = 'general_chat'
         user_data['chat_history'] = []
-        save_users(users)
+        save_users({**users, chat_id: user_data})
         bot.edit_message_text("تم تفعيل وضع البحث العام. تفضل بسؤالك.", chat_id, call.message.message_id)
     elif action == "search_books":
+        user_data['state'] = 'browsing_books'
+        save_users({**users, chat_id: user_data})
         show_book_list(chat_id, call.message.message_id)
-    # --- التعديل: تغيير منطق الزر الجديد ---
-    elif action == "customize_bot":
-        markup = telebot.types.InlineKeyboardMarkup()
-        markup.add(telebot.types.InlineKeyboardButton("⬅️ العودة إلى القائمة الرئيسية", callback_data="main_menu"))
-        text = "⚙️ هذه الميزة قيد التطوير وستتوفر قريباً..."
-        try:
-            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup)
-        except Exception as e:
-            print(f"Error editing message for customize_bot: {e}")
-            # If editing fails, send a new message
-            bot.send_message(call.message.chat.id, text, reply_markup=markup)
-
     elif action.startswith("book:"):
         try:
             _, book_id = action.split(':', 1)
             available_books = user_data.get('available_books', [])
             book_name = next((b['name'] for b in available_books if b['id'] == book_id), "غير معروف")
-            
-            bot.edit_message_text(f"⏳ يتم الآن تجهيز وفهرسة كتاب '{book_name}' لأول مرة...", chat_id, call.message.message_id)
+            bot.edit_message_text(f"⏳ يتم الآن تجهيز وفهرسة كتاب '{book_name}'...", chat_id, call.message.message_id)
             result = index_book(book_id, book_name)
-
             if result == "indexed":
-                user_data['state'] = 'book_chat'
-                user_data['selected_book_id'] = book_id
-                user_data['selected_book_name'] = book_name
+                user_data.update({'state': 'book_chat', 'selected_book_id': book_id, 'selected_book_name': book_name})
                 user_data.pop('available_books', None)
-                save_users(users)
-                
+                save_users({**users, chat_id: user_data})
                 reply_markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
                 reply_markup.add(telebot.types.KeyboardButton("⬅️ العودة إلى قائمة الكتب"))
-                
-                bot.send_message(chat_id, f"✅ تم تجهيز كتاب '{book_name}' بنجاح.\nيمكنك الآن طرح أسئلتك حوله.", reply_markup=reply_markup)
+                bot.send_message(chat_id, f"✅ تم تجهيز كتاب '{book_name}' بنجاح.", reply_markup=reply_markup)
             else:
                 bot.send_message(chat_id, f"حدث خطأ أثناء تجهيز الكتاب: {result}")
+                show_main_menu(chat_id)
         except Exception as e:
             bot.send_message(chat_id, f"حدث خطأ في معالجة اختيارك: {e}")
+            show_main_menu(chat_id)
+
+@bot.message_handler(content_types=['document'])
+def handle_document(message):
+    chat_id = str(message.chat.id)
+    users = load_users()
+    user_data = users.get(chat_id)
+
+    if user_data and user_data.get('state') == 'awaiting_book_file':
+        document = message.document
+        if not (document.file_name.lower().endswith('.pdf') or document.file_name.lower().endswith('.txt')):
+            bot.reply_to(message, "❌ صيغة الملف غير مدعومة. يرجى إرسال ملف PDF أو TXT فقط.")
+            return
+
+        bot.reply_to(message, "✅ تم استلام الملف. جارٍ إرساله للمراجعة...")
+        send_book_to_dev(message.from_user, document)
+        user_data['state'] = 'main_menu'
+        save_users(users)
+        bot.send_message(chat_id, "شكرًا لمساهمتك! سيتم مراجعة الكتاب وإضافته في أقرب وقت. 🙏")
+        show_main_menu(chat_id)
 
 @bot.message_handler(func=lambda m: True)
 def handle_user_message(message):
@@ -474,8 +469,8 @@ def handle_user_message(message):
     user_state = user_data.get('state')
     
     if user_state == 'awaiting_feedback':
-        log_interaction(message.from_user, "📝 اقتراح/مشكلة", message.text)
-        bot.send_message(chat_id, "✅ شكرًا لك! تم استلام رسالتك.")
+        send_feedback_to_dev(message.from_user, message.text)
+        bot.send_message(chat_id, "✅ شكرًا لك! تم استلام رسالتك بنجاح وجارِ مراجعتها.")
         user_data['state'] = 'main_menu'
         save_users(users)
         show_main_menu(chat_id)
@@ -509,13 +504,18 @@ def handle_user_message(message):
         send_long_message(chat_id, response, parse_mode="Markdown")
         
         if "حدثت مشكلة" not in response and "خطأ" not in response:
-            user_data.setdefault("chat_history", []).append({"role": "user", "parts": [{"text": message.text}]})
-            user_data["chat_history"].append({"role": "model", "parts": [{"text": response}]})
-            user_data["chat_history"] = user_data["chat_history"][-10:]
+            chat_history = user_data.get("chat_history", [])
+            chat_history.append({"role": "user", "parts": [{"text": message.text}]})
+            chat_history.append({"role": "model", "parts": [{"text": response}]})
+            user_data["chat_history"] = chat_history[-10:]
             save_users(users)
     else:
-        show_main_menu(chat_id)
+        # If the user is in a state like 'awaiting_book_file' and sends text instead of a file
+        if user_data.get('state') == 'awaiting_book_file':
+             bot.send_message(chat_id, "يرجى إرسال ملف الكتاب وليس رسالة نصية. أو يمكنك العودة للقائمة الرئيسية.")
+        else: # Default behavior
+            show_main_menu(chat_id)
 
 if __name__ == "__main__":
-    print(f"Starting Gemini RAG Bot (v3.3 - Customize Screen)... [ Shirbin - {time.strftime('%Y-%m-%d %H:%M:%S')} ]")
+    print(f"Starting Univy Bot v1.0 - The Complete Version... [ Shirbin - {time.strftime('%Y-%m-%d %H:%M:%S')} ]")
     bot.infinity_polling()
