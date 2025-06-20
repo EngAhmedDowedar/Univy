@@ -1,20 +1,16 @@
-# 🤖 بوت Gemini التعليمي المتقدم (Dowedar's Bot)
+# 🤖 بوت Univy - مساعدك التعليمي الذكي
 
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue?style=for-the-badge&logo=python)
-![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
-![GitHub issues](https://img.shields.io/github/issues/YOUR_USERNAME/YOUR_REPONAME?style=for-the-badge)
-![GitHub forks](https://img.shields.io/github/forks/YOUR_USERNAME/YOUR_REPONAME?style=for-the-badge&logo=github)
-![GitHub stars](https://img.shields.io/github/stars/YOUR_USERNAME/YOUR_REPONAME?style=for-the-badge&logo=github)
+![License](https://img.shields.io/github/license/EngAhmedDowedar/Ai-bot?style=for-the-badge)
+![GitHub issues](https://img.shields.io/github/issues/EngAhmedDowedar/Ai-bot?style=for-the-badge)
+![GitHub forks](https://img.shields.io/github/forks/EngAhmedDowedar/Ai-bot?style=for-the-badge&logo=github)
+![GitHub stars](https://img.shields.io/github/stars/EngAhmedDowedar/Ai-bot?style=for-the-badge&logo=github)
 
-بوت تليجرام متقدم يستخدم قوة Google Gemini API لتقديم إجابات ذكية، مع قدرة فريدة على إنشاء قواعد معرفة تلقائية من الكتب والمستندات للرد السريع والدقيق.
+**Univy** هو بوت تليجرام متقدم يستخدم قوة Google Gemini API لتقديم إجابات ذكية، مع قدرة فريدة على إنشاء قواعد معرفة تلقائية من الكتب والمستندات للرد السريع والدقيق.
 
 ---
 
 ### ✨ لمحة سريعة (عرض حي)
-
-<p align="center">
-  <img src="assets/bot_demo.gif" width="300" />
-</p>
 
 ---
 
@@ -36,8 +32,8 @@
 
 **1. استنساخ المستودع (Clone):**
 ```bash
-git clone [https://github.com/YOUR_USERNAME/YOUR_REPONAME.git](https://github.com/YOUR_USERNAME/YOUR_REPONAME.git)
-cd YOUR_REPONAME
+git clone [https://github.com/EngAhmedDowedar/Ai-bot.git](https://github.com/EngAhmedDowedar/Ai-bot.git)
+cd Ai-bot
 ```
 
 **2. إنشاء بيئة افتراضية (Recommended):**
@@ -52,25 +48,20 @@ pip install -r requirements.txt
 ```
 
 **4. إعداد متغيرات البيئة:**
-   - قم بنسخ ملف `.env.example` إلى `.env`:
+   - قم بنسخ ملف `.env.example` إلى `.env`. في أنظمة ويندوز استخدم `copy` وفي أنظمة لينكس/ماك استخدم `cp`.
      ```bash
+     # Windows
+     copy .env.example .env
+     # Linux / macOS
      cp .env.example .env
      ```
-   - افتح ملف `.env` الجديد واملأ جميع المتغيرات المطلوبة:
-     ```
-     TELEGRAM_BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN"
-     API_KEYS="YOUR_GEMINI_API_KEY_1,YOUR_GEMINI_API_KEY_2"
-     DRIVE_FOLDER_ID="YOUR_GOOGLE_DRIVE_FOLDER_ID"
-     LOG_BOT_TOKEN="YOUR_LOGGING_BOT_TOKEN"
-     LOG_CHAT_ID="YOUR_LOGGING_CHAT_ID"
-     # ... وهكذا
-     ```
+   - افتح ملف `.env` الجديد واملأ جميع المتغيرات المطلوبة.
 
 **5. إعداد صلاحيات Google Drive:**
    - اتبع [هذا الدليل](https://developers.google.com/workspace/guides/create-credentials#create_credentials_for_a_service_account) لإنشاء حساب خدمة (Service Account).
    - قم بتنزيل ملف الصلاحيات بصيغة JSON.
    - أعد تسميته إلى `credentials.json` وضعه في المجلد الرئيسي للمشروع.
-   - لا تنسَ دعوة بريد حساب الخدمة (Service Account's email) إلى مجلد Google Drive الخاص بالكتب ومنحه صلاحية "Viewer".
+   - **هام جداً:** لا تنسَ دعوة بريد حساب الخدمة (Service Account's email) إلى مجلد Google Drive الخاص بالكتب ومنحه صلاحية "Viewer".
 
 **6. تشغيل البوت:**
 ```bash
@@ -81,7 +72,7 @@ python main.py
 
 ### 🛠️ كيفية المساهمة
 
-نرحب بجميع المساهمات! سواء كانت إصلاح أخطاء، أو إضافة ميزات جديدة، أو تحسين التوثيق. يرجى الاطلاع على `CONTRIBUTING.md` لمعرفة المزيد.
+نرحب بجميع المساهمات! سواء كانت إصلاح أخطاء، أو إضافة ميزات جديدة، أو تحسين التوثيق. يمكنك البدء عن طريق فتح "Issue" جديد لمناقشة التغييرات التي تقترحها.
 
 ---
 
@@ -93,6 +84,6 @@ python main.py
 
 ### 💬 تواصل
 
-صُنع بحب ❤️ بواسطة **Eng. Ahmed Dowedar**.
+صُنع بحب ❤️ بواسطة **م/ أحمد دويدار (Eng. Ahmed Dowedar)**.
 
-[![GitHub](https://img.shields.io/badge/GitHub-Profile-black?style=for-the-badge&logo=github)](https://github.com/YOUR_USERNAME)
+[![GitHub](https://img.shields.io/badge/GitHub-Profile-black?style=for-the-badge&logo=github)](https://github.com/EngAhmedDowedar)
